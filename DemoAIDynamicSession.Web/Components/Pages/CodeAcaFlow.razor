@@ -1,0 +1,692 @@
+@page "/code-aca-flow"
+@rendermode InteractiveServer
+@using System.Text
+@using DemoAIDynamicSession.Web.CodeExecution
+@using DemoAIDynamicSession.Web.CodeGeneration
+@inject PythonCodeGenerationApiClient CodeGenerationApi
+@inject CodeExecutionApiClient CodeApi
+
+<PageTitle>Code + ACA Flow</PageTitle>
+
+<div class="code-flow-page">
+    <header class="page-header">
+        <div>
+            <span class="eyebrow">Demo tecnica</span>
+            <h1>Code generation + ACA Dynamic Sessions</h1>
+            <p>
+                Un flusso guidato e trasparente: carichi un file, fai generare codice Python,
+                lo esegui in una sandbox ACA Dynamic Session e scarichi gli artefatti prodotti.
+            </p>
+        </div>
+        <div class="mode-badge @ModeCssClass">
+            <span class="mode-dot" aria-hidden="true"></span>
+            <div>
+                <strong>@ModeLabel</strong>
+                <span>@(status?.IsSandboxed == true ? "Sandbox isolata" : "Modalità demo/fallback")</span>
+            </div>
+        </div>
+    </header>
+
+    @if (status is not null && !status.IsSandboxed)
+    {
+        <div class="alert alert-warning" role="alert">
+            @status.Description
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible" role="alert">
+            @errorMessage
+            <button type="button" class="btn-close" aria-label="Chiudi" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(successMessage))
+    {
+        <div class="alert alert-success alert-dismissible" role="status">
+            @successMessage
+            <button type="button" class="btn-close" aria-label="Chiudi" @onclick="() => successMessage = null"></button>
+        </div>
+    }
+
+    <section class="flow-strip" aria-label="Passaggi della demo">
+        <div class="flow-step @(uploadedFile is not null ? "is-done" : "is-active")">
+            <span>1</span>
+            <strong>File</strong>
+            <small>Upload nella sessione</small>
+        </div>
+        <div class="flow-step @(generation is not null ? "is-done" : uploadedFile is not null ? "is-active" : null)">
+            <span>2</span>
+            <strong>Codice</strong>
+            <small>Generazione Python</small>
+        </div>
+        <div class="flow-step @(execution is not null ? "is-done" : generation is not null ? "is-active" : null)">
+            <span>3</span>
+            <strong>ACA</strong>
+            <small>Esecuzione sandbox</small>
+        </div>
+        <div class="flow-step @(sessionFiles.Count > 0 ? "is-done" : execution is not null ? "is-active" : null)">
+            <span>4</span>
+            <strong>Output</strong>
+            <small>File e download</small>
+        </div>
+    </section>
+
+    <div class="main-grid">
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <span class="eyebrow">Passo 1</span>
+                    <h2>Input demo</h2>
+                </div>
+                <div class="session-control">
+                    <label for="session-id">Sessione ACA</label>
+                    <div class="session-input">
+                        <input id="session-id" class="form-control" @bind="sessionId" spellcheck="false" />
+                        <button type="button" class="btn btn-light" @onclick="NewSession">Nuova</button>
+                    </div>
+                    <small>Lo stesso id mantiene stato e file nella sandbox.</small>
+                </div>
+            </div>
+
+            <div class="input-block">
+                <label class="form-label" for="business-file">File dati</label>
+                <InputFile id="business-file"
+                           class="form-control"
+                           OnChange="SelectFile"
+                           disabled="@(isUploading || isGenerating || isExecuting || status?.ExecutorMode == CodeExecutorModes.Disabled)" />
+                <small class="text-body-secondary">
+                    Consigliato: CSV/TXT/JSON fino a 20 MB. Per la demo puoi caricare un CSV vendite.
+                </small>
+            </div>
+
+            @if (uploadedFile is not null)
+            {
+                <div class="uploaded-file">
+                    <span class="bi bi-file-earmark-check" aria-hidden="true"></span>
+                    <div>
+                        <strong>@uploadedFile.FileName</strong>
+                        <small>@uploadedFile.Path</small>
+                    </div>
+                </div>
+            }
+
+            <div class="input-block">
+                <label class="form-label" for="prompt">Richiesta</label>
+                <textarea id="prompt"
+                          class="form-control prompt-box"
+                          rows="6"
+                          @bind="prompt"
+                          @bind:event="oninput"></textarea>
+                <small class="text-body-secondary">
+                    La richiesta serve solo a generare codice: l'esecuzione resta separata e visibile.
+                </small>
+            </div>
+
+            <div class="panel-actions">
+                <button type="button"
+                        class="btn btn-primary"
+                        disabled="@(!CanGenerate)"
+                        @onclick="GenerateCodeAsync">
+                    @if (isGenerating)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        <span>Generazione...</span>
+                    }
+                    else
+                    {
+                        <span>1. Genera codice</span>
+                    }
+                </button>
+                <button type="button"
+                        class="btn btn-outline-primary"
+                        disabled="@(!CanRunFullFlow)"
+                        @onclick="RunFullFlowAsync">
+                    @if (isRunningFullFlow)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        <span>Flow in corso...</span>
+                    }
+                    else
+                    {
+                        <span>Esegui flow completo</span>
+                    }
+                </button>
+            </div>
+        </section>
+
+        <section class="panel code-panel">
+            <div class="panel-header">
+                <div>
+                    <span class="eyebrow">Passo 2</span>
+                    <h2>Codice generato</h2>
+                </div>
+                @if (generation is not null)
+                {
+                    <span class="status-pill @(generation.Success ? "is-success" : "is-failed")">
+                        @(generation.Success ? "Generato" : "Errore")
+                    </span>
+                }
+            </div>
+
+            @if (generation is null)
+            {
+                <div class="state-panel">
+                    <h3>Nessun codice generato</h3>
+                    <p>Carica un file o usa solo il prompt, poi genera il codice Python.</p>
+                </div>
+            }
+            else if (!generation.Success)
+            {
+                <div class="alert alert-warning mb-0" role="alert">
+                    @generation.Error
+                </div>
+                <details>
+                    <summary>Risposta grezza del modello</summary>
+                    <pre class="stream result">@generation.RawResponse</pre>
+                </details>
+            }
+            else
+            {
+                @if (!string.IsNullOrWhiteSpace(generation.Notes))
+                {
+                    <p class="generation-notes">@generation.Notes</p>
+                }
+
+                <textarea class="code-editor"
+                          rows="18"
+                          spellcheck="false"
+                          aria-label="Codice Python generato"
+                          @bind="generatedCode"
+                          @bind:event="oninput"></textarea>
+
+                @if (generation.ExpectedFiles.Count > 0)
+                {
+                    <div class="expected-files">
+                        <strong>File attesi:</strong>
+                        @foreach (var file in generation.ExpectedFiles)
+                        {
+                            <code>@file</code>
+                        }
+                    </div>
+                }
+
+                <div class="panel-actions">
+                    <button type="button"
+                            class="btn btn-primary"
+                            disabled="@(!CanExecute)"
+                            @onclick="ExecuteGeneratedCodeAsync">
+                        @if (isExecuting)
+                        {
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                            <span>Esecuzione...</span>
+                        }
+                        else
+                        {
+                            <span>2. Esegui in ACA</span>
+                        }
+                    </button>
+                </div>
+            }
+        </section>
+    </div>
+
+    <div class="main-grid">
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <span class="eyebrow">Passo 3</span>
+                    <h2>Output esecuzione</h2>
+                </div>
+                @if (execution is not null)
+                {
+                    <span class="status-pill @(execution.IsSuccess ? "is-success" : "is-failed")">
+                        @execution.Status
+                    </span>
+                }
+            </div>
+
+            @if (execution is null)
+            {
+                <div class="state-panel">
+                    <h3>Nessuna esecuzione</h3>
+                    <p>Il codice generato verrà inviato alla Dynamic Session selezionata.</p>
+                </div>
+            }
+            else
+            {
+                <div class="execution-meta">
+                    <span>@execution.DurationMs.ToString("0") ms</span>
+                    <span>@execution.ExecutedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                    <span>@execution.SessionId</span>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(execution.Stdout))
+                {
+                    <h3 class="stream-title">stdout</h3>
+                    <pre class="stream stdout">@execution.Stdout</pre>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(execution.Stderr))
+                {
+                    <h3 class="stream-title">stderr</h3>
+                    <pre class="stream stderr">@execution.Stderr</pre>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(execution.Result))
+                {
+                    <h3 class="stream-title">result</h3>
+                    <pre class="stream result">@execution.Result</pre>
+                }
+
+                @if (string.IsNullOrWhiteSpace(execution.Stdout)
+                    && string.IsNullOrWhiteSpace(execution.Stderr)
+                    && string.IsNullOrWhiteSpace(execution.Result))
+                {
+                    <p class="no-output">Nessun output testuale prodotto.</p>
+                }
+            }
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <span class="eyebrow">Passo 4</span>
+                    <h2>Artefatti prodotti</h2>
+                </div>
+                <button type="button"
+                        class="btn btn-light"
+                        disabled="@isLoadingFiles"
+                        @onclick="LoadFilesAsync">
+                    @if (isLoadingFiles)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                    }
+                    Aggiorna
+                </button>
+            </div>
+
+            @if (sessionFiles.Count == 0)
+            {
+                <div class="state-panel">
+                    <h3>Nessun artefatto</h3>
+                    <p>Dopo l'esecuzione vedrai qui CSV, report, immagini e altri file generati.</p>
+                </div>
+            }
+            else
+            {
+                <div class="artifact-list">
+                    @foreach (var file in sessionFiles)
+                    {
+                        <article class="artifact-card">
+                            <div>
+                                <strong>@file.FileName</strong>
+                                <small>@FormatFileSize(file.Size) · @FormatLastModified(file.LastModifiedTime)</small>
+                            </div>
+                            <a class="btn btn-sm btn-outline-primary"
+                               href="@GetDownloadUrl(file.FileName)"
+                               target="_blank"
+                               rel="noopener">
+                                Download
+                            </a>
+                        </article>
+                    }
+                </div>
+            }
+        </section>
+    </div>
+
+    <section class="panel how-it-works">
+        <span class="eyebrow">Cosa mostra questa pagina</span>
+        <h2>Il giro tecnico completo</h2>
+        <ol class="flow">
+            <li>
+                <strong>Upload</strong>
+                <span>Il file viene caricato nella sandbox associata all'identificatore di sessione.</span>
+            </li>
+            <li>
+                <strong>Code generation</strong>
+                <span>Il modello riceve prompt e anteprima del file, poi produce codice Python leggibile.</span>
+            </li>
+            <li>
+                <strong>ACA Dynamic Sessions</strong>
+                <span>Il codice viene eseguito nella sandbox tramite management API, non nel processo Web/API.</span>
+            </li>
+            <li>
+                <strong>Artefatti</strong>
+                <span>File generati, immagini e report restano nella sessione e vengono scaricati via proxy Web.</span>
+            </li>
+        </ol>
+    </section>
+</div>
+
+@code {
+    private const long MaxUploadBytes = 20 * 1024 * 1024;
+    private const int PreviewMaxLines = 20;
+    private const int PreviewMaxChars = 2_000;
+
+    private static readonly HashSet<string> TextPreviewExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".csv", ".txt", ".json", ".md", ".tsv", ".log",
+    };
+
+    private CodeExecutionStatus? status;
+    private IBrowserFile? selectedFile;
+    private UploadedDemoFile? uploadedFile;
+    private PythonCodeGenerationResult? generation;
+    private CodeExecutionResult? execution;
+    private IReadOnlyList<SessionFile> sessionFiles = [];
+    private string sessionId = NewSessionId();
+    private string prompt = """
+        Leggi il file caricato, calcola un riepilogo utile dei dati e genera:
+        - un file report.md con insight principali;
+        - un CSV di riepilogo;
+        - se i dati lo permettono, un grafico PNG.
+        """;
+    private string generatedCode = string.Empty;
+    private string? errorMessage;
+    private string? successMessage;
+    private bool isUploading;
+    private bool isGenerating;
+    private bool isExecuting;
+    private bool isLoadingFiles;
+    private bool isRunningFullFlow;
+
+    private bool CanGenerate =>
+        !isUploading &&
+        !isGenerating &&
+        !isExecuting &&
+        !isRunningFullFlow &&
+        !string.IsNullOrWhiteSpace(prompt) &&
+        (selectedFile is null || status?.ExecutorMode != CodeExecutorModes.Disabled);
+
+    private bool CanRunFullFlow => CanGenerate && status?.ExecutorMode != CodeExecutorModes.Disabled;
+
+    private bool CanExecute =>
+        !isExecuting &&
+        !isRunningFullFlow &&
+        !string.IsNullOrWhiteSpace(generatedCode) &&
+        status?.ExecutorMode != CodeExecutorModes.Disabled;
+
+    private string ModeLabel => status?.ExecutorMode switch
+    {
+        CodeExecutorModes.AzureDynamicSessions => "Azure dynamic sessions",
+        CodeExecutorModes.LocalFallback => "Esecuzione locale",
+        CodeExecutorModes.Disabled => "Esecuzione disabilitata",
+        _ => "Verifica in corso..."
+    };
+
+    private string ModeCssClass => status?.ExecutorMode switch
+    {
+        CodeExecutorModes.AzureDynamicSessions => "is-azure",
+        CodeExecutorModes.LocalFallback => "is-local",
+        CodeExecutorModes.Disabled => "is-disabled",
+        _ => "is-unknown"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            status = await CodeApi.GetStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Impossibile contattare l'API: {ex.Message}";
+        }
+    }
+
+    private void SelectFile(InputFileChangeEventArgs args)
+    {
+        selectedFile = args.File;
+        uploadedFile = null;
+        generation = null;
+        execution = null;
+        generatedCode = string.Empty;
+        successMessage = null;
+    }
+
+    private void NewSession()
+    {
+        sessionId = NewSessionId();
+        selectedFile = null;
+        uploadedFile = null;
+        generation = null;
+        execution = null;
+        sessionFiles = [];
+        generatedCode = string.Empty;
+        errorMessage = null;
+        successMessage = null;
+    }
+
+    private async Task RunFullFlowAsync()
+    {
+        if (!CanRunFullFlow)
+        {
+            return;
+        }
+
+        isRunningFullFlow = true;
+        try
+        {
+            await GenerateCodeAsync();
+            if (generation?.Success == true && !string.IsNullOrWhiteSpace(generatedCode))
+            {
+                await ExecuteGeneratedCodeAsync();
+            }
+        }
+        finally
+        {
+            isRunningFullFlow = false;
+        }
+    }
+
+    private async Task GenerateCodeAsync()
+    {
+        if (!CanGenerate && !isRunningFullFlow)
+        {
+            return;
+        }
+
+        isGenerating = true;
+        errorMessage = null;
+        successMessage = null;
+        generation = null;
+        execution = null;
+        generatedCode = string.Empty;
+
+        try
+        {
+            if (selectedFile is not null && uploadedFile is null)
+            {
+                uploadedFile = await UploadSelectedFileAsync(selectedFile);
+                await LoadFilesAsync();
+            }
+
+            var hints = uploadedFile is null
+                ? null
+                : new[]
+                {
+                    new AttachedFileHint(
+                        $"{uploadedFile.FileName} (per leggerlo usa il path {uploadedFile.Path})",
+                        uploadedFile.Preview)
+                };
+
+            generation = await CodeGenerationApi.GenerateAsync(BuildPrompt(), hints);
+            generatedCode = generation.Code ?? string.Empty;
+
+            successMessage = generation.Success
+                ? "Codice Python generato. Puoi ispezionarlo, modificarlo e poi inviarlo ad ACA Dynamic Sessions."
+                : null;
+        }
+        catch (CodeExecutionFailedException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (IOException ex)
+        {
+            errorMessage = $"Impossibile leggere il file: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Errore durante la generazione del codice: {ex.Message}";
+        }
+        finally
+        {
+            isGenerating = false;
+        }
+    }
+
+    private async Task ExecuteGeneratedCodeAsync()
+    {
+        if (!CanExecute && !isRunningFullFlow)
+        {
+            return;
+        }
+
+        isExecuting = true;
+        errorMessage = null;
+        successMessage = null;
+        execution = null;
+
+        try
+        {
+            execution = await CodeApi.ExecuteAsync(new CodeExecutionInput(generatedCode, sessionId));
+            sessionId = execution.SessionId;
+            await LoadFilesAsync();
+
+            successMessage = execution.IsSuccess
+                ? "Codice eseguito nella sessione. Gli artefatti prodotti sono disponibili per il download."
+                : "Esecuzione completata con errori: controlla stderr.";
+        }
+        catch (CodeExecutionFailedException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Errore durante l'esecuzione: {ex.Message}";
+        }
+        finally
+        {
+            isExecuting = false;
+        }
+    }
+
+    private async Task<UploadedDemoFile> UploadSelectedFileAsync(IBrowserFile file)
+    {
+        isUploading = true;
+        try
+        {
+            await using var source = file.OpenReadStream(MaxUploadBytes);
+            using var buffer = new MemoryStream();
+            await source.CopyToAsync(buffer);
+            var bytes = buffer.ToArray();
+
+            await using var uploadStream = new MemoryStream(bytes);
+            var result = await CodeApi.UploadFileAsync(sessionId, file.Name, uploadStream);
+            return new UploadedDemoFile(result.FileName, result.Path, BuildPreview(file.Name, bytes));
+        }
+        finally
+        {
+            isUploading = false;
+        }
+    }
+
+    private async Task LoadFilesAsync()
+    {
+        if (isLoadingFiles)
+        {
+            return;
+        }
+
+        isLoadingFiles = true;
+        errorMessage = null;
+
+        try
+        {
+            sessionFiles = await CodeApi.GetFilesAsync(sessionId);
+        }
+        catch (CodeExecutionFailedException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Impossibile leggere i file della sessione: {ex.Message}";
+        }
+        finally
+        {
+            isLoadingFiles = false;
+        }
+    }
+
+    private string BuildPrompt()
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(prompt.Trim());
+
+        if (uploadedFile is not null)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Usa il file caricato nella sessione ACA.");
+            builder.AppendLine($"Nome file: {uploadedFile.FileName}");
+            builder.AppendLine($"Path reale nella sandbox: {uploadedFile.Path}");
+            builder.AppendLine("Leggi il file dal path reale indicato sopra.");
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("Salva gli output nella directory corrente con nomi descrittivi.");
+
+        return builder.ToString();
+    }
+
+    private static string? BuildPreview(string fileName, byte[] data)
+    {
+        if (!TextPreviewExtensions.Contains(Path.GetExtension(fileName)))
+        {
+            return null;
+        }
+
+        string text;
+        try
+        {
+            text = Encoding.UTF8.GetString(data);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        var preview = string.Join('\n', text.Split('\n').Take(PreviewMaxLines));
+        return preview.Length > PreviewMaxChars ? preview[..PreviewMaxChars] : preview;
+    }
+
+    private string GetDownloadUrl(string fileName) =>
+        $"/files/{Uri.EscapeDataString(sessionId)}/{Uri.EscapeDataString(fileName)}";
+
+    private static string FormatFileSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        var size = (double)bytes;
+        var unit = 0;
+
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+
+        return $"{size:0.##} {units[unit]}";
+    }
+
+    private static string FormatLastModified(DateTimeOffset timestamp) =>
+        timestamp == DateTimeOffset.MinValue
+            ? "Non disponibile"
+            : timestamp.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss");
+
+    private static string NewSessionId() => $"flow-{Guid.NewGuid():n}"[..16];
+
+    private sealed record UploadedDemoFile(string FileName, string Path, string? Preview);
+}

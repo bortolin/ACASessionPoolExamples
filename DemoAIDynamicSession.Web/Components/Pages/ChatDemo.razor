@@ -1,0 +1,54 @@
+@page "/chat-demo"
+@rendermode InteractiveServer
+@using Balzor.Chat.Components
+@using Balzor.Chat.Components.Models
+@using DemoAIDynamicSession.Web.Chat
+@inject PythonCodeGenerationChatClient ChatClient
+
+<PageTitle>Chat Demo</PageTitle>
+
+<div class="d-flex flex-column gap-3">
+    <div>
+        <h1>Chat Demo</h1>
+        <p class="text-body-secondary mb-0">
+            Pagina didattica con il componente chat gia' presente nel progetto.
+            Ogni richiesta passa dal Web all'ApiService, che chiede a Ollama di generare uno script Python
+            in formato JSON strutturato. Il codice generato viene quindi eseguito in una ACA Dynamic Session:
+            output e file prodotti (scaricabili) vengono mostrati direttamente in chat.
+            Puoi anche allegare un file (es. CSV) con il tasto "Allega": viene caricato nella sandbox
+            <em>prima</em> del prompt, cosi' il codice generato puo' leggerlo davvero invece di inventare dati.
+        </p>
+    </div>
+
+    <AiChat ChatClient="ChatClient"
+            Title="Generazione ed esecuzione codice Python (Ollama + ACA Dynamic Sessions)"
+            EmptyStateText="Scrivi una richiesta, oppure allega un file e chiedi di analizzarlo: Ollama generera' uno script Python e verra' eseguito in una ACA Dynamic Session."
+            InputPlaceholder="Esempio: genera un file CSV con 50 vendite fittizie..."
+            SuggestedPrompts="SuggestedPrompts"
+            ShowSuggestedPromptsAfterResponse="true"
+            Height="650px" />
+</div>
+
+@code {
+    private static readonly IReadOnlyList<SuggestedPrompt> SuggestedPrompts =
+    [
+        new()
+        {
+            Label = "CSV vendite",
+            Text = "Genera un file CSV con 50 vendite fittizie e un summary.txt con il totale per prodotto.",
+            IconCssClass = "bi bi-filetype-csv",
+        },
+        new()
+        {
+            Label = "Report spese",
+            Text = "Crea un report.txt con una tabella di spese aziendali e il totale per categoria.",
+            IconCssClass = "bi bi-receipt",
+        },
+        new()
+        {
+            Label = "Grafico vendite",
+            Text = "Genera un grafico a barre (PNG) con le vendite mensili fittizie di 3 prodotti negli ultimi 6 mesi.",
+            IconCssClass = "bi bi-bar-chart-line",
+        },
+    ];
+}

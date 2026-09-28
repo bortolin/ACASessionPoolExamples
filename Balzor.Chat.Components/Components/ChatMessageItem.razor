@@ -1,0 +1,48 @@
+<div class="d-flex mb-3 @(IsUser ? "justify-content-end" : "justify-content-start")">
+    <div class="balzor-chat-bubble @(IsUser ? "balzor-chat-bubble-user bg-primary text-white" : "balzor-chat-bubble-assistant bg-body-secondary")">
+        @if (!IsUser && Message.Activities.Count > 0)
+        {
+            <ChatActivityList Activities="Message.Activities" />
+        }
+
+        @if (MessageTemplate is not null)
+        {
+            @MessageTemplate(Message)
+        }
+        else if (IsUser)
+        {
+            <span class="balzor-chat-text">@Message.Text</span>
+            @if (Message.Attachments.Count > 0)
+            {
+                <div class="balzor-chat-message-files mt-2">
+                    @foreach (var attachment in Message.Attachments)
+                    {
+                        <span class="badge bg-light text-dark border">@attachment.FileName</span>
+                    }
+                </div>
+            }
+        }
+        else if (!string.IsNullOrEmpty(Message.Text))
+        {
+            <div class="balzor-chat-markdown">@((MarkupString)MarkdownRenderer.ToSafeHtml(Message.Text))</div>
+        }
+
+        @if (Message.IsStreaming && string.IsNullOrEmpty(Message.Text) && Message.Activities.Count == 0)
+        {
+            <ChatTypingIndicator />
+        }
+
+        @if (!string.IsNullOrEmpty(Message.Error))
+        {
+            <div class="alert alert-danger py-1 px-2 mt-2 mb-0 small" role="alert">@Message.Error</div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ChatUiMessage Message { get; set; } = default!;
+
+    [Parameter] public RenderFragment<ChatUiMessage>? MessageTemplate { get; set; }
+
+    private bool IsUser => Message.Role == ChatRole.User;
+}

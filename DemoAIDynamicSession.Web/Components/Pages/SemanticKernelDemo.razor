@@ -1,0 +1,262 @@
+@page "/semantic-kernel-demo"
+@rendermode InteractiveServer
+@using DemoAIDynamicSession.Web.SemanticKernelDemo
+@inject SemanticKernelDemoApiClient DemoApi
+
+<PageTitle>Semantic Kernel + Dynamic Sessions</PageTitle>
+
+<div class="sk-demo-page">
+    <header class="hero">
+        <div>
+            <span class="eyebrow">Demo didattica end-to-end</span>
+            <h1>Da PDF a Excel con Semantic Kernel</h1>
+            <p>
+                Carica un PDF contenente contatti e osserva il flusso che collega
+                <strong>Semantic Kernel</strong>, <strong>SessionsPythonPlugin</strong> e
+                <strong>ACA Dynamic Sessions</strong>.
+            </p>
+        </div>
+        <div class="simulation-badge is-live">
+            <span class="bi bi-cloud-check-fill" aria-hidden="true"></span>
+            <div>
+                <strong>Integrazione reale</strong>
+                <small>Semantic Kernel + ACA Dynamic Sessions</small>
+            </div>
+        </div>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible" role="alert">
+            @errorMessage
+            <button type="button" class="btn-close" aria-label="Chiudi" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    <section class="architecture-strip" aria-label="Architettura della demo">
+        <div><span class="bi bi-file-earmark-pdf"></span><strong>PDF</strong><small>Input utente</small></div>
+        <span class="connector bi bi-arrow-right"></span>
+        <div><span class="bi bi-diagram-3"></span><strong>Semantic Kernel</strong><small>Invoca il plugin</small></div>
+        <span class="connector bi bi-arrow-right"></span>
+        <div><span class="bi bi-plugin"></span><strong>Python plugin</strong><small>Esecuzione</small></div>
+        <span class="connector bi bi-arrow-right"></span>
+        <div><span class="bi bi-box"></span><strong>ACA Session</strong><small>Sandbox Python</small></div>
+        <span class="connector bi bi-arrow-right"></span>
+        <div><span class="bi bi-file-earmark-excel"></span><strong>Excel</strong><small>Artefatto</small></div>
+    </section>
+
+    <div class="content-grid">
+        <section class="panel upload-panel">
+            <div class="panel-heading">
+                <div>
+                    <span class="eyebrow">Input</span>
+                    <h2>Carica il PDF</h2>
+                </div>
+                <span class="step-number">01</span>
+            </div>
+
+            <label class="drop-zone @(selectedFile is not null ? "has-file" : null)" for="contacts-pdf">
+                <InputFile id="contacts-pdf"
+                           accept=".pdf,application/pdf"
+                           OnChange="SelectFile"
+                           disabled="@isProcessing" />
+                <span class="bi @(selectedFile is null ? "bi-cloud-arrow-up" : "bi-file-earmark-check")"></span>
+                @if (selectedFile is null)
+                {
+                    <strong>Scegli un PDF con contatti</strong>
+                    <small>PDF testuale, massimo 10 MB</small>
+                }
+                else
+                {
+                    <strong>@selectedFile.Name</strong>
+                    <small>@FormatBytes(selectedFile.Size)</small>
+                }
+            </label>
+
+            <div class="prompt-preview">
+                <span>Trasformazione eseguita</span>
+                <p>
+                    Estrai nome, cognome, azienda, ruolo, email e telefono dal PDF.
+                    Normalizza i dati e genera <code>contatti.xlsx</code>.
+                </p>
+            </div>
+
+            <button type="button"
+                    class="btn btn-primary btn-lg w-100"
+                    disabled="@(selectedFile is null || isProcessing)"
+                    @onclick="RunProcessingAsync">
+                @if (isProcessing)
+                {
+                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                    <span>Elaborazione in corso...</span>
+                }
+                else
+                {
+                    <span class="bi bi-play-fill" aria-hidden="true"></span>
+                    <span>Avvia il flusso</span>
+                }
+            </button>
+        </section>
+
+        <section class="panel timeline-panel">
+            <div class="panel-heading">
+                <div>
+                    <span class="eyebrow">Dietro le quinte</span>
+                    <h2>Passaggi del Kernel</h2>
+                </div>
+                <span class="step-number">02</span>
+            </div>
+
+            @if (isProcessing)
+            {
+                <div class="processing-state">
+                    <div class="spinner-grow text-primary" role="status"><span class="visually-hidden">Elaborazione</span></div>
+                    <strong>Elaborazione del PDF in corso...</strong>
+                    <small>Upload, invocazione del plugin ed esecuzione nella sandbox.</small>
+                </div>
+            }
+            else if (result is null)
+            {
+                <div class="empty-state">
+                    <span class="bi bi-list-check"></span>
+                    <h3>Timeline in attesa</h3>
+                    <p>Carica un PDF e avvia il flusso per visualizzare ogni passaggio.</p>
+                </div>
+            }
+            else
+            {
+                <ol class="timeline">
+                    @foreach (var step in result.Steps)
+                    {
+                        <li>
+                            <span class="timeline-marker @(step.Status == "failed" ? "is-failed bi bi-x-lg" : "bi bi-check-lg")"></span>
+                            <div class="timeline-content">
+                                <div>
+                                    <strong>@step.Title</strong>
+                                    <span>@step.Component</span>
+                                </div>
+                                <p>@step.Description</p>
+                                @if (!string.IsNullOrWhiteSpace(step.Detail))
+                                {
+                                    <details>
+                                        <summary>Dettaglio tecnico</summary>
+                                        <code>@step.Detail</code>
+                                    </details>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ol>
+            }
+        </section>
+    </div>
+
+    @if (result is not null)
+    {
+        <section class="panel results-panel">
+            <div class="panel-heading results-heading">
+                <div>
+                    <span class="eyebrow">Risultato reale</span>
+                    <h2>@result.ContactCount contatti estratti</h2>
+                    <p>Sessione <code>@result.SessionId[..8]…</code> · completata alle @result.CompletedAt.ToLocalTime().ToString("HH:mm:ss")</p>
+                </div>
+                <a class="btn btn-success btn-lg"
+                   href="@($"/semantic-kernel-demo/files/{Uri.EscapeDataString(result.OperationId)}")">
+                    <span class="bi bi-download" aria-hidden="true"></span>
+                    Scarica @result.GeneratedFileName
+                </a>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Nome</th>
+                            <th>Azienda</th>
+                            <th>Ruolo</th>
+                            <th>Email</th>
+                            <th>Telefono</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var contact in result.Contacts)
+                        {
+                            <tr>
+                                <td><strong>@contact.FirstName @contact.LastName</strong></td>
+                                <td>@contact.Company</td>
+                                <td>@contact.Role</td>
+                                <td><a href="mailto:@contact.Email">@contact.Email</a></td>
+                                <td>@contact.Phone</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="kernel-response">
+                <span class="eyebrow">Risposta finale del Kernel</span>
+                <p>@result.KernelResponse</p>
+            </div>
+        </section>
+    }
+
+    <section class="panel next-step">
+        <span class="bi bi-code-square" aria-hidden="true"></span>
+        <div>
+            <span class="eyebrow">Implementazione</span>
+            <h2>Cosa avviene realmente nell'ApiService</h2>
+            <p>
+                L'ApiService carica direttamente il PDF in <code>/mnt/data/input.pdf</code>.
+                Semantic Kernel invoca <code>SessionsPythonPlugin</code>, che esegue lo script
+                nella stessa sessione e l'ApiService scarica <code>/mnt/data/contatti.xlsx</code>.
+            </p>
+        </div>
+    </section>
+</div>
+
+@code {
+    private const long MaxUploadBytes = 10 * 1024 * 1024;
+
+    private IBrowserFile? selectedFile;
+    private PdfToExcelResult? result;
+    private string? errorMessage;
+    private bool isProcessing;
+
+    private void SelectFile(InputFileChangeEventArgs args)
+    {
+        selectedFile = args.File;
+        result = null;
+        errorMessage = null;
+    }
+
+    private async Task RunProcessingAsync()
+    {
+        if (selectedFile is null || isProcessing)
+        {
+            return;
+        }
+
+        isProcessing = true;
+        result = null;
+        errorMessage = null;
+
+        try
+        {
+            await using var stream = selectedFile.OpenReadStream(MaxUploadBytes);
+            result = await DemoApi.ProcessAsync(selectedFile.Name, stream);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+        finally
+        {
+            isProcessing = false;
+        }
+    }
+
+    private static string FormatBytes(long bytes) =>
+        bytes >= 1024 * 1024
+            ? $"{bytes / 1024d / 1024d:N1} MB"
+            : $"{bytes / 1024d:N0} KB";
+}

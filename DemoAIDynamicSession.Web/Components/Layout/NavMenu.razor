@@ -1,0 +1,49 @@
+﻿<script type="module" src="@Assets["Components/Layout/NavMenu.razor.js"]"></script>
+
+<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="">DemoAIDynamicSession</a>
+    </div>
+</div>
+
+<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+<div id="nav-scrollable" class="nav-scrollable">
+    <nav class="nav flex-column">
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <span class="bi bi-house-door-fill" aria-hidden="true"></span> Home
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="dynamic-sessions">
+                <span class="bi bi-terminal-fill" aria-hidden="true"></span> Dynamic Sessions
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="code-aca-flow">
+                <span class="bi bi-file-earmark-code-fill" aria-hidden="true"></span> Code + ACA
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="chat-demo">
+                <span class="bi bi-chat-dots-fill" aria-hidden="true"></span> Chat Demo
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="semantic-kernel-demo">
+                <span class="bi bi-diagram-3-fill" aria-hidden="true"></span> Semantic Kernel
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="session-pool">
+                <span class="bi bi-hdd-stack-fill" aria-hidden="true"></span> Session Pool
+            </NavLink>
+        </div>
+    </nav>
+</div>

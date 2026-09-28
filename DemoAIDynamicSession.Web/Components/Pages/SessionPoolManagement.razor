@@ -1,0 +1,674 @@
+@page "/session-pool"
+@rendermode InteractiveServer
+@implements IDisposable
+@using DemoAIDynamicSession.Web.CodeExecution
+@using DemoAIDynamicSession.Web.SessionManagement
+@inject SessionManagementApiClient SessionApi
+
+<PageTitle>Session Pool</PageTitle>
+
+<div class="pool-page">
+    <header class="page-header">
+        <div>
+            <span class="eyebrow">Azure Container Apps</span>
+            <h1>Gestione del session pool</h1>
+            <p>
+                Oltre a eseguire codice, la management API del pool permette di
+                <strong>elencare</strong> le sessioni attive, leggerne i <strong>dettagli</strong>
+                (creazione, ultimo accesso, scadenza) e <strong>terminarle</strong> in qualsiasi momento.
+            </p>
+        </div>
+        <div class="mode-badge @(status?.IsAvailable == true ? "is-azure" : status is null ? "is-unknown" : "is-disabled")">
+            <span class="mode-dot" aria-hidden="true"></span>
+            <div>
+                <strong>@(status?.PoolName ?? (status is null ? "Verifica in corso..." : "Pool non configurato"))</strong>
+                <span>@(status?.Region is { } region ? $"Regione {region}" : "Management API")</span>
+            </div>
+        </div>
+    </header>
+
+    @if (status is not null && !status.IsAvailable)
+    {
+        <div class="alert alert-warning" role="alert">
+            @status.Description
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible" role="alert">
+            @errorMessage
+            <button type="button" class="btn-close" aria-label="Chiudi" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(successMessage))
+    {
+        <div class="alert alert-success alert-dismissible" role="status">
+            @successMessage
+            <button type="button" class="btn-close" aria-label="Chiudi" @onclick="() => successMessage = null"></button>
+        </div>
+    }
+
+    <section class="stats" aria-label="Riepilogo del pool">
+        <div class="stat">
+            <span class="stat-label">Sessioni attive</span>
+            <strong class="stat-value">@(sessions?.Count.ToString() ?? "–")</strong>
+            <span class="stat-hint">sandbox allocate nel pool</span>
+        </div>
+        <div class="stat @(ExpiringCount > 0 ? "is-warning" : null)">
+            <span class="stat-label">In scadenza</span>
+            <strong class="stat-value">@(sessions is null ? "–" : ExpiringCount.ToString())</strong>
+            <span class="stat-hint">entro @ExpiringThreshold.TotalSeconds.ToString("0") secondi</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Prossima scadenza</span>
+            <strong class="stat-value">@FormatRemaining(NextExpiry)</strong>
+            <span class="stat-hint">@(NextExpirySession?.Identifier ?? "nessuna sessione")</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Ultimo aggiornamento</span>
+            <strong class="stat-value">@(lastRefresh?.ToLocalTime().ToString("HH:mm:ss") ?? "–")</strong>
+            <span class="stat-hint">@(autoRefresh ? $"auto ogni {AutoRefreshInterval.TotalSeconds:0}s" : "aggiornamento manuale")</span>
+        </div>
+    </section>
+
+    <div class="pool-grid">
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <span class="eyebrow">listSessions</span>
+                    <h2>Sessioni in esecuzione</h2>
+                </div>
+                <div class="header-actions">
+                    <label class="auto-refresh">
+                        <input type="checkbox" class="form-check-input" @bind="autoRefresh" disabled="@(!IsAvailable)" />
+                        <span>Auto</span>
+                    </label>
+                    <button type="button" class="btn btn-light" disabled="@(isLoading || !IsAvailable)" @onclick="RefreshAsync">
+                        @if (isLoading)
+                        {
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        }
+                        Aggiorna
+                    </button>
+                </div>
+            </div>
+
+            <div class="toolbar">
+                <input class="form-control search"
+                       placeholder="Filtra per identificatore..."
+                       spellcheck="false"
+                       @bind="filter"
+                       @bind:event="oninput" />
+                <div class="create-session">
+                    <input class="form-control mono"
+                           placeholder="Identificatore (opzionale)"
+                           spellcheck="false"
+                           @bind="newSessionId" />
+                    <button type="button" class="btn btn-primary" disabled="@(isCreating || !IsAvailable)" @onclick="CreateSessionAsync">
+                        @if (isCreating)
+                        {
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                            <span>Avvio...</span>
+                        }
+                        else
+                        {
+                            <span>Avvia sessione</span>
+                        }
+                    </button>
+                </div>
+            </div>
+
+            @if (sessions is null)
+            {
+                <div class="state-panel">
+                    @if (isLoading)
+                    {
+                        <span class="spinner-border" role="status" aria-hidden="true"></span>
+                        <p>Lettura delle sessioni dal pool...</p>
+                    }
+                    else
+                    {
+                        <h3>Nessun dato</h3>
+                        <p>La lista delle sessioni è disponibile solo con un session pool Azure configurato.</p>
+                    }
+                </div>
+            }
+            else if (FilteredSessions.Count == 0)
+            {
+                <div class="state-panel">
+                    <h3>@(sessions.Count == 0 ? "Pool vuoto" : "Nessuna corrispondenza")</h3>
+                    <p>
+                        @(sessions.Count == 0
+                            ? "Non ci sono sessioni attive. Avviane una qui o esegui codice dalle altre demo."
+                            : "Nessuna sessione corrisponde al filtro impostato.")
+                    </p>
+                </div>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="table session-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">Identificatore</th>
+                                <th scope="col">Creata</th>
+                                <th scope="col">Ultimo accesso</th>
+                                <th scope="col">Scade tra</th>
+                                <th scope="col"><span class="visually-hidden">Azioni</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var session in FilteredSessions)
+                            {
+                                var remaining = Remaining(session.ExpiresAt);
+                                <tr class="@(selectedId == session.Identifier ? "is-selected" : null)"
+                                    @onclick="() => SelectSessionAsync(session.Identifier)">
+                                    <td><code>@session.Identifier</code></td>
+                                    <td>@FormatTime(session.CreatedAt)</td>
+                                    <td>@FormatAgo(session.LastAccessedAt)</td>
+                                    <td>
+                                        <span class="ttl @TtlCssClass(remaining)">@FormatRemaining(remaining)</span>
+                                    </td>
+                                    <td class="row-actions" @onclick:stopPropagation="true">
+                                        @if (pendingDeleteId == session.Identifier)
+                                        {
+                                            <button type="button" class="btn btn-sm btn-danger"
+                                                    disabled="@(deletingId == session.Identifier)"
+                                                    @onclick="() => DeleteSessionAsync(session.Identifier)">
+                                                @if (deletingId == session.Identifier)
+                                                {
+                                                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                                }
+                                                Conferma
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-light" @onclick="() => pendingDeleteId = null">
+                                                Annulla
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="btn btn-sm btn-outline-danger"
+                                                    title="Termina la sessione"
+                                                    @onclick="() => pendingDeleteId = session.Identifier">
+                                                Termina
+                                            </button>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="panel detail-panel">
+            <div class="panel-header">
+                <div>
+                    <span class="eyebrow">getSession</span>
+                    <h2>Dettaglio sessione</h2>
+                </div>
+                @if (details is not null)
+                {
+                    <button type="button" class="btn btn-light" disabled="@isLoadingDetails" @onclick="() => LoadDetailsAsync(details.Session.Identifier, includeFiles: false)">
+                        @if (isLoadingDetails)
+                        {
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        }
+                        Ricarica
+                    </button>
+                }
+            </div>
+
+            @if (details is null)
+            {
+                <div class="state-panel">
+                    @if (isLoadingDetails)
+                    {
+                        <span class="spinner-border" role="status" aria-hidden="true"></span>
+                    }
+                    else
+                    {
+                        <h3>Nessuna sessione selezionata</h3>
+                        <p>Seleziona una riga della tabella per leggerne i metadati dal pool.</p>
+                    }
+                </div>
+            }
+            else
+            {
+                var session = details.Session;
+                var remaining = Remaining(session.ExpiresAt);
+                var lifetime = LifetimeProgress(session);
+
+                <div class="detail-id">
+                    <code>@session.Identifier</code>
+                    <span class="ttl @TtlCssClass(remaining)">@FormatRemaining(remaining)</span>
+                </div>
+
+                <div class="lifetime" title="Tempo trascorso dall'ultimo accesso rispetto al cooldown">
+                    <div class="lifetime-bar @TtlCssClass(remaining)" style="width: @(lifetime.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                </div>
+
+                <dl class="detail-list">
+                    <dt>Creata</dt>
+                    <dd>@FormatDateTime(session.CreatedAt) <small>@FormatAgo(session.CreatedAt)</small></dd>
+                    <dt>Ultimo accesso</dt>
+                    <dd>@FormatDateTime(session.LastAccessedAt) <small>@FormatAgo(session.LastAccessedAt)</small></dd>
+                    <dt>Scadenza</dt>
+                    <dd>@FormatDateTime(session.ExpiresAt)</dd>
+                    <dt>Durata di vita</dt>
+                    <dd>@FormatDuration(session.CreatedAt is { } created ? DateTimeOffset.UtcNow - created : null)</dd>
+                    <dt>ETag</dt>
+                    <dd><code>@(session.Etag ?? "–")</code></dd>
+                </dl>
+
+                <div class="panel-actions">
+                    <button type="button" class="btn btn-primary" disabled="@isKeepingAlive" @onclick="() => KeepAliveAsync(session.Identifier)"
+                            title="Esegue un'istruzione vuota: ogni richiesta azzera il cooldown della sessione">
+                        @if (isKeepingAlive)
+                        {
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        }
+                        Prolunga
+                    </button>
+                    <button type="button" class="btn btn-light" disabled="@isLoadingDetails" @onclick="() => LoadDetailsAsync(session.Identifier, includeFiles: true)"
+                            title="La lettura dei file è una richiesta alla sessione e ne prolunga la durata">
+                        Mostra file
+                    </button>
+                    @if (pendingDeleteId == session.Identifier)
+                    {
+                        <button type="button" class="btn btn-danger ms-auto" disabled="@(deletingId == session.Identifier)" @onclick="() => DeleteSessionAsync(session.Identifier)">
+                            Conferma terminazione
+                        </button>
+                    }
+                    else
+                    {
+                        <button type="button" class="btn btn-outline-danger ms-auto" @onclick="() => pendingDeleteId = session.Identifier">
+                            Termina sessione
+                        </button>
+                    }
+                </div>
+
+                @if (details.Files is { } files)
+                {
+                    <div class="files">
+                        <h3>File in <code>/mnt/data</code></h3>
+                        @if (files.Count == 0)
+                        {
+                            <p class="no-output">Nessun file presente nella sessione.</p>
+                        }
+                        else
+                        {
+                            <ul>
+                                @foreach (var file in files)
+                                {
+                                    <li>
+                                        <code>@file.FileName</code>
+                                        <span>@FormatFileSize(file.Size)</span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
+            }
+        </section>
+    </div>
+
+    <section class="panel how-it-works">
+        <span class="eyebrow">Come funziona</span>
+        <h2>Le API di gestione del pool</h2>
+        <ol class="flow">
+            <li>
+                <strong>Elenco</strong>
+                <span><code>GET {endpoint}/listSessions?skip=0</code> restituisce fino a 300 sessioni per pagina, con <code>nextLink</code> per le successive.</span>
+            </li>
+            <li>
+                <strong>Dettaglio</strong>
+                <span><code>GET {endpoint}/session?identifier={id}</code> restituisce creazione, ultimo accesso, scadenza ed ETag.</span>
+            </li>
+            <li>
+                <strong>Terminazione</strong>
+                <span><code>DELETE {endpoint}/session?identifier={id}</code> libera subito la sandbox e la capacità del pool (204 No Content).</span>
+            </li>
+            <li>
+                <strong>Cooldown</strong>
+                <span>Ogni richiesta alla sessione (esecuzione, file) azzera il timer di inattività e ne sposta in avanti la scadenza.</span>
+            </li>
+        </ol>
+        @if (!string.IsNullOrWhiteSpace(status?.PoolManagementEndpoint))
+        {
+            <p class="endpoint">
+                Pool configurato: <code>@status.PoolManagementEndpoint</code>
+                · api-version <code>@status.ManagementApiVersion</code>
+            </p>
+        }
+    </section>
+</div>
+
+@code {
+    private static readonly TimeSpan ExpiringThreshold = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan AutoRefreshInterval = TimeSpan.FromSeconds(10);
+
+    private SessionManagementStatus? status;
+    private IReadOnlyList<SessionInfo>? sessions;
+    private SessionDetails? details;
+    private DateTimeOffset? lastRefresh;
+    private Timer? timer;
+    private string filter = string.Empty;
+    private string? newSessionId;
+    private string? selectedId;
+    private string? pendingDeleteId;
+    private string? deletingId;
+    private string? errorMessage;
+    private string? successMessage;
+    private bool autoRefresh = true;
+    private bool isLoading;
+    private bool isLoadingDetails;
+    private bool isCreating;
+    private bool isKeepingAlive;
+
+    private bool IsAvailable => status?.IsAvailable == true;
+
+    private IReadOnlyList<SessionInfo> FilteredSessions =>
+        sessions is null
+            ? []
+            : string.IsNullOrWhiteSpace(filter)
+                ? sessions
+                : sessions.Where(s => s.Identifier.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase)).ToArray();
+
+    private int ExpiringCount =>
+        sessions?.Count(s => Remaining(s.ExpiresAt) is { } r && r <= ExpiringThreshold) ?? 0;
+
+    private SessionInfo? NextExpirySession =>
+        sessions?.Where(s => s.ExpiresAt is not null).MinBy(s => s.ExpiresAt);
+
+    private TimeSpan? NextExpiry => Remaining(NextExpirySession?.ExpiresAt);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            status = await SessionApi.GetStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Impossibile contattare l'API: {ex.Message}";
+            return;
+        }
+
+        if (IsAvailable)
+        {
+            await RefreshAsync();
+        }
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Aggiorna i countdown ogni secondo e, se attivo, ricarica la lista dal pool.
+            timer = new Timer(_ => InvokeAsync(OnTickAsync), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+        }
+    }
+
+    private async Task OnTickAsync()
+    {
+        if (autoRefresh && IsAvailable && !isLoading &&
+            (lastRefresh is null || DateTimeOffset.UtcNow - lastRefresh >= AutoRefreshInterval))
+        {
+            await RefreshAsync(showErrors: false);
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task RefreshAsync() => await RefreshAsync(showErrors: true);
+
+    private async Task RefreshAsync(bool showErrors)
+    {
+        if (isLoading)
+        {
+            return;
+        }
+
+        isLoading = true;
+        try
+        {
+            sessions = await SessionApi.ListSessionsAsync();
+            lastRefresh = DateTimeOffset.UtcNow;
+
+            // Mantiene allineato il dettaglio con i dati appena letti.
+            if (details is not null)
+            {
+                var updated = sessions.FirstOrDefault(s => s.Identifier == details.Session.Identifier);
+                details = updated is null ? null : details with { Session = updated };
+                if (updated is null)
+                {
+                    selectedId = null;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            if (showErrors)
+            {
+                errorMessage = ex is CodeExecutionFailedException ? ex.Message : $"Impossibile leggere le sessioni: {ex.Message}";
+            }
+            else
+            {
+                // Evita di ripetere richieste fallite ogni secondo.
+                lastRefresh = DateTimeOffset.UtcNow;
+            }
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task SelectSessionAsync(string identifier)
+    {
+        selectedId = identifier;
+        await LoadDetailsAsync(identifier, includeFiles: false);
+    }
+
+    private async Task LoadDetailsAsync(string identifier, bool includeFiles)
+    {
+        isLoadingDetails = true;
+        errorMessage = null;
+
+        try
+        {
+            details = await SessionApi.GetSessionAsync(identifier, includeFiles);
+            if (details is null)
+            {
+                errorMessage = $"La sessione '{identifier}' non esiste più.";
+                selectedId = null;
+                await RefreshAsync();
+            }
+            else
+            {
+                ReplaceSession(details.Session);
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex is CodeExecutionFailedException ? ex.Message : $"Impossibile leggere la sessione: {ex.Message}";
+        }
+        finally
+        {
+            isLoadingDetails = false;
+        }
+    }
+
+    private async Task CreateSessionAsync()
+    {
+        isCreating = true;
+        errorMessage = null;
+        successMessage = null;
+
+        try
+        {
+            var created = await SessionApi.CreateSessionAsync(string.IsNullOrWhiteSpace(newSessionId) ? null : newSessionId.Trim());
+            successMessage = $"Sessione '{created.Identifier}' avviata.";
+            newSessionId = null;
+            await RefreshAsync();
+            selectedId = created.Identifier;
+            details = new SessionDetails(created, null);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex is CodeExecutionFailedException ? ex.Message : $"Impossibile avviare la sessione: {ex.Message}";
+        }
+        finally
+        {
+            isCreating = false;
+        }
+    }
+
+    private async Task KeepAliveAsync(string identifier)
+    {
+        isKeepingAlive = true;
+        errorMessage = null;
+        successMessage = null;
+
+        try
+        {
+            var previousExpiry = details?.Session.ExpiresAt;
+            var updated = await SessionApi.KeepAliveAsync(identifier);
+            details = new SessionDetails(updated, details?.Files);
+            ReplaceSession(updated);
+
+            successMessage = previousExpiry is { } before && updated.ExpiresAt is { } after && after > before
+                ? $"Scadenza di '{identifier}' spostata in avanti di {FormatDuration(after - before)}."
+                : $"Richiesta inviata a '{identifier}': cooldown azzerato.";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex is CodeExecutionFailedException ? ex.Message : $"Impossibile prolungare la sessione: {ex.Message}";
+        }
+        finally
+        {
+            isKeepingAlive = false;
+        }
+    }
+
+    private async Task DeleteSessionAsync(string identifier)
+    {
+        deletingId = identifier;
+        errorMessage = null;
+        successMessage = null;
+
+        try
+        {
+            var deleted = await SessionApi.DeleteSessionAsync(identifier);
+            successMessage = deleted
+                ? $"Sessione '{identifier}' terminata."
+                : $"La sessione '{identifier}' era già terminata.";
+
+            if (selectedId == identifier)
+            {
+                selectedId = null;
+                details = null;
+            }
+
+            sessions = sessions?.Where(s => s.Identifier != identifier).ToArray();
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex is CodeExecutionFailedException ? ex.Message : $"Impossibile terminare la sessione: {ex.Message}";
+        }
+        finally
+        {
+            deletingId = null;
+            pendingDeleteId = null;
+        }
+    }
+
+    private void ReplaceSession(SessionInfo session)
+    {
+        if (sessions is null)
+        {
+            return;
+        }
+
+        sessions = sessions.Any(s => s.Identifier == session.Identifier)
+            ? sessions.Select(s => s.Identifier == session.Identifier ? session : s).ToArray()
+            : [session, .. sessions];
+    }
+
+    private static TimeSpan? Remaining(DateTimeOffset? expiresAt) =>
+        expiresAt is { } value ? value - DateTimeOffset.UtcNow : null;
+
+    private static double LifetimeProgress(SessionInfo session)
+    {
+        if (session.ExpiresAt is not { } expires)
+        {
+            return 0;
+        }
+
+        var start = session.LastAccessedAt ?? session.CreatedAt;
+        if (start is null || expires <= start)
+        {
+            return 0;
+        }
+
+        var total = (expires - start.Value).TotalSeconds;
+        var left = Math.Clamp((expires - DateTimeOffset.UtcNow).TotalSeconds, 0, total);
+        return left / total * 100;
+    }
+
+    private static string TtlCssClass(TimeSpan? remaining) => remaining switch
+    {
+        null => "is-unknown",
+        { } r when r <= TimeSpan.Zero => "is-expired",
+        { } r when r <= ExpiringThreshold => "is-expiring",
+        _ => "is-ok"
+    };
+
+    private static string FormatRemaining(TimeSpan? remaining) => remaining switch
+    {
+        null => "–",
+        { } r when r <= TimeSpan.Zero => "scaduta",
+        { } r when r.TotalHours >= 1 => $"{(int)r.TotalHours}h {r.Minutes:00}m",
+        { } r => $"{(int)r.TotalMinutes}:{r.Seconds:00}"
+    };
+
+    private static string FormatDuration(TimeSpan? duration) => duration switch
+    {
+        null => "–",
+        { TotalHours: >= 1 } d => $"{(int)d.TotalHours}h {d.Minutes}m",
+        { TotalMinutes: >= 1 } d => $"{(int)d.TotalMinutes}m {d.Seconds}s",
+        { } d => $"{Math.Max(0, (int)d.TotalSeconds)}s"
+    };
+
+    private static string FormatAgo(DateTimeOffset? timestamp) =>
+        timestamp is { } value ? $"{FormatDuration(DateTimeOffset.UtcNow - value)} fa" : "–";
+
+    private static string FormatTime(DateTimeOffset? timestamp) =>
+        timestamp?.ToLocalTime().ToString("HH:mm:ss") ?? "–";
+
+    private static string FormatDateTime(DateTimeOffset? timestamp) =>
+        timestamp?.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss") ?? "Non disponibile";
+
+    private static string FormatFileSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        var size = (double)bytes;
+        var unit = 0;
+
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+
+        return $"{size:0.##} {units[unit]}";
+    }
+
+    public void Dispose() => timer?.Dispose();
+}

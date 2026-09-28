@@ -1,0 +1,183 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div class="balzor-chat card" style="@ContainerStyle">
+    @if (!string.IsNullOrEmpty(Title))
+    {
+        <div class="card-header d-flex align-items-center justify-content-between">
+            <span class="fw-semibold">@Title</span>
+            @if (_conversation is { Messages.Count: > 0 })
+            {
+                <button type="button" class="btn btn-sm btn-link text-decoration-none" @onclick="HandleClear">
+                    Nuova conversazione
+                </button>
+            }
+        </div>
+    }
+
+    <div class="card-body balzor-chat-messages" @ref="_messagesContainer">
+        @if (_conversation is { Messages.Count: 0 })
+        {
+            <div class="balzor-chat-empty text-center text-body-secondary my-4">
+                <p>@EmptyStateText</p>
+            </div>
+            <SuggestedPrompts Prompts="SuggestedPrompts" Disabled="_conversation.IsResponding" OnPromptSelected="HandlePromptSelected" />
+        }
+        else if (_conversation is not null)
+        {
+            @foreach (var message in _conversation.Messages)
+            {
+                <ChatMessageItem Message="message" MessageTemplate="MessageTemplate" />
+            }
+
+            @if (ShowSuggestedPromptsAfterResponse && !_conversation.IsResponding)
+            {
+                <SuggestedPrompts Prompts="SuggestedPrompts" Disabled="_conversation.IsResponding" OnPromptSelected="HandlePromptSelected" />
+            }
+        }
+    </div>
+
+    <div class="card-footer">
+        @if (_conversation is not null)
+        {
+            <ChatInput Placeholder="@InputPlaceholder" IsResponding="_conversation.IsResponding" OnSend="HandleSend" OnStop="_conversation.CancelResponse" />
+        }
+    </div>
+</div>
+
+@code {
+    private AiChatConversation? _conversation;
+    private IChatClient? _boundChatClient;
+    private ElementReference _messagesContainer;
+    private IJSObjectReference? _jsModule;
+    private bool _pendingScroll;
+
+    [Parameter, EditorRequired]
+    public IChatClient ChatClient { get; set; } = default!;
+
+    [Parameter]
+    public string? SystemInstructions { get; set; }
+
+    [Parameter]
+    public ChatOptions? ChatOptions { get; set; }
+
+    [Parameter]
+    public string Title { get; set; } = "Assistente";
+
+    [Parameter]
+    public string EmptyStateText { get; set; } = "Come posso aiutarti oggi?";
+
+    [Parameter]
+    public string InputPlaceholder { get; set; } = "Scrivi un messaggio...";
+
+    [Parameter]
+    public IReadOnlyList<SuggestedPrompt>? SuggestedPrompts { get; set; }
+
+    [Parameter]
+    public bool ShowSuggestedPromptsAfterResponse { get; set; }
+
+    [Parameter]
+    public string? Height { get; set; } = "600px";
+
+    [Parameter]
+    public RenderFragment<ChatUiMessage>? MessageTemplate { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnMessageSent { get; set; }
+
+    [Parameter]
+    public EventCallback<ChatUiMessage> OnResponseCompleted { get; set; }
+
+    private string? ContainerStyle => string.IsNullOrEmpty(Height) ? null : $"--balzor-chat-height:{Height};";
+
+    protected override void OnParametersSet()
+    {
+        if (ChatClient is null)
+        {
+            throw new InvalidOperationException($"{nameof(AiChat)} richiede il parametro '{nameof(ChatClient)}' (un'implementazione di IChatClient da Microsoft.Extensions.AI).");
+        }
+
+        if (!ReferenceEquals(_boundChatClient, ChatClient))
+        {
+            if (_conversation is not null)
+            {
+                _conversation.Changed -= HandleConversationChanged;
+            }
+
+            _boundChatClient = ChatClient;
+            _conversation = new AiChatConversation(ChatClient)
+            {
+                SystemInstructions = SystemInstructions,
+                ChatOptions = ChatOptions,
+            };
+            _conversation.Changed += HandleConversationChanged;
+        }
+        else if (_conversation is not null)
+        {
+            _conversation.SystemInstructions = SystemInstructions;
+            _conversation.ChatOptions = ChatOptions;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _jsModule = await JS.InvokeAsync<IJSObjectReference>("import", BalzorChatInterop.ModulePath);
+        }
+
+        if (_pendingScroll && _jsModule is not null)
+        {
+            _pendingScroll = false;
+            await _jsModule.InvokeVoidAsync("scrollToBottom", _messagesContainer);
+        }
+    }
+
+    private Task HandlePromptSelected(string text) => HandleSend(new ChatSendRequest { Text = text });
+
+    private async Task HandleSend(ChatSendRequest request)
+    {
+        if (_conversation is null)
+        {
+            return;
+        }
+
+        await OnMessageSent.InvokeAsync(request.Text);
+        _pendingScroll = true;
+        await _conversation.SendAsync(request.Text, request.Attachments);
+
+        var lastMessage = _conversation.Messages.Count > 0 ? _conversation.Messages[^1] : null;
+        if (lastMessage is not null)
+        {
+            await OnResponseCompleted.InvokeAsync(lastMessage);
+        }
+    }
+
+    private void HandleClear() => _conversation?.ClearConversation();
+
+    private void HandleConversationChanged()
+    {
+        _pendingScroll = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_conversation is not null)
+        {
+            _conversation.Changed -= HandleConversationChanged;
+        }
+
+        if (_jsModule is not null)
+        {
+            try
+            {
+                await _jsModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Il circuito Blazor Server è già stato chiuso: nulla da ripulire lato client.
+            }
+        }
+    }
+}

@@ -1,0 +1,110 @@
+<div class="balzor-chat-input">
+    @if (_attachments.Count > 0)
+    {
+        <div class="balzor-chat-attachments mb-2" aria-label="File allegati">
+            @foreach (var attachment in _attachments)
+            {
+                <span class="badge text-bg-light border">
+                    @attachment.FileName
+                    <button type="button" class="btn-close ms-1" aria-label="Rimuovi @attachment.FileName" @onclick="() => RemoveAttachment(attachment)"></button>
+                </span>
+            }
+        </div>
+    }
+
+    <div class="input-group">
+        <label class="btn btn-outline-secondary" title="Allega file">
+            Allega
+            <InputFile class="d-none" OnChange="HandleFileSelected" multiple disabled="@IsResponding" />
+        </label>
+        <textarea class="form-control balzor-chat-textarea"
+                  rows="1"
+                  placeholder="@Placeholder"
+                  value="@_text"
+                  disabled="@IsResponding"
+                  @oninput="OnInput"
+                  @onkeydown="OnKeyDown"></textarea>
+
+        @if (IsResponding)
+        {
+            <button type="button" class="btn btn-outline-danger" @onclick="() => OnStop.InvokeAsync()">
+                Interrompi
+            </button>
+        }
+        else
+        {
+            <button type="button" class="btn btn-primary" disabled="@(!CanSend)" @onclick="Send">
+                Invia
+            </button>
+        }
+    </div>
+</div>
+
+@code {
+    private string _text = string.Empty;
+
+    [Parameter] public string Placeholder { get; set; } = "Scrivi un messaggio...";
+
+    [Parameter] public bool IsResponding { get; set; }
+
+    [Parameter] public EventCallback<ChatSendRequest> OnSend { get; set; }
+
+    [Parameter] public int MaxFiles { get; set; } = 5;
+
+    [Parameter] public long MaxFileSize { get; set; } = 10 * 1024 * 1024;
+
+    [Parameter] public EventCallback OnStop { get; set; }
+
+    private readonly List<ChatAttachment> _attachments = [];
+
+    private bool CanSend => !IsResponding && (!string.IsNullOrWhiteSpace(_text) || _attachments.Count > 0);
+
+    private void OnInput(ChangeEventArgs e) => _text = e.Value?.ToString() ?? string.Empty;
+
+    private async Task HandleFileSelected(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles(MaxFiles))
+        {
+            await using var stream = file.OpenReadStream(MaxFileSize);
+            using var memory = new MemoryStream();
+            await stream.CopyToAsync(memory);
+            _attachments.Add(new ChatAttachment
+            {
+                FileName = file.Name,
+                MediaType = string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,
+                Data = memory.ToArray(),
+            });
+        }
+
+        StateHasChanged();
+    }
+
+    private void RemoveAttachment(ChatAttachment attachment) => _attachments.Remove(attachment);
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        // Invio con Enter, a capo con Shift+Enter: pattern standard delle chat AI.
+        // Il newline che Enter inserisce di default viene comunque rimosso dal reset di _text in Send().
+        if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            await Send();
+        }
+    }
+
+    private async Task Send()
+    {
+        if (!CanSend)
+        {
+            return;
+        }
+
+        var request = new ChatSendRequest
+        {
+            Text = _text.Trim(),
+            Attachments = _attachments.ToArray(),
+        };
+        _text = string.Empty;
+        _attachments.Clear();
+        await OnSend.InvokeAsync(request);
+    }
+}

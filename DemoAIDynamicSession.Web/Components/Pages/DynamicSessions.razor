@@ -1,0 +1,473 @@
+@page "/dynamic-sessions"
+@rendermode InteractiveServer
+@using DemoAIDynamicSession.Web.CodeExecution
+@inject CodeExecutionApiClient CodeApi
+
+<PageTitle>Dynamic Sessions</PageTitle>
+
+<div class="sessions-page">
+    <header class="page-header">
+        <div>
+            <span class="eyebrow">Azure Container Apps</span>
+            <h1>Esecuzione codice in sandbox</h1>
+            <p>
+                Il codice viene inviato alla management API di un session pool
+                <strong>dynamic sessions</strong> ed eseguito in una sandbox isolata,
+                creata in millisecondi e distrutta a fine sessione.
+            </p>
+        </div>
+        <div class="mode-badge @ModeCssClass">
+            <span class="mode-dot" aria-hidden="true"></span>
+            <div>
+                <strong>@ModeLabel</strong>
+                <span>@(status?.IsSandboxed == true ? "Sandbox isolata" : "Nessun isolamento")</span>
+            </div>
+        </div>
+    </header>
+
+    @if (status is not null && !status.IsSandboxed)
+    {
+        <div class="alert alert-warning" role="alert">
+            @status.Description
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger alert-dismissible" role="alert">
+            @errorMessage
+            <button type="button" class="btn-close" aria-label="Chiudi" @onclick="() => errorMessage = null"></button>
+        </div>
+    }
+
+    <div class="sessions-grid">
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <span class="eyebrow">Passo 1</span>
+                    <h2>Codice Python</h2>
+                </div>
+                <div class="session-control">
+                    <label for="session-id">Identificatore sessione</label>
+                    <div class="session-input">
+                        <input id="session-id" class="form-control" @bind="sessionId" spellcheck="false" />
+                        <button class="btn btn-light"
+                                title="Genera un nuovo identificatore di sessione"
+                                @onclick="NewSession">
+                            Nuova
+                        </button>
+                    </div>
+                    <small>Stesso identificatore = stessa sandbox, con stato e file persistenti.</small>
+                </div>
+            </div>
+
+            @if (samples.Count > 0)
+            {
+                <div class="samples">
+                    @foreach (var sample in samples)
+                    {
+                        <button type="button"
+                                class="sample-chip @(selectedSampleId == sample.Id ? "is-active" : null)"
+                                title="@sample.Description"
+                                @onclick="() => LoadSample(sample)">
+                            @sample.Title
+                        </button>
+                    }
+                </div>
+                @if (SelectedSample is not null)
+                {
+                    <p class="sample-description">@SelectedSample.Description</p>
+                }
+            }
+
+            <textarea class="code-editor"
+                      rows="16"
+                      spellcheck="false"
+                      aria-label="Codice Python da eseguire"
+                      @bind="code"
+                      @bind:event="oninput"></textarea>
+
+            <div class="panel-actions">
+                <button class="btn btn-primary" disabled="@(isRunning || string.IsNullOrWhiteSpace(code))" @onclick="ExecuteAsync">
+                    @if (isRunning)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        <span>Esecuzione...</span>
+                    }
+                    else
+                    {
+                        <span>Esegui nella sessione</span>
+                    }
+                </button>
+                <button class="btn btn-light" disabled="@(executions.Count == 0)" @onclick="ClearHistory">
+                    Pulisci output
+                </button>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div>
+                    <span class="eyebrow">Passo 2</span>
+                    <h2>Output della sandbox</h2>
+                </div>
+                <span class="execution-count">@executions.Count @(executions.Count == 1 ? "esecuzione" : "esecuzioni")</span>
+            </div>
+
+            @if (executions.Count == 0)
+            {
+                <div class="state-panel">
+                    <h3>Nessuna esecuzione</h3>
+                    <p>Scegli uno snippet di esempio ed esegui il codice per vedere il risultato.</p>
+                </div>
+            }
+            else
+            {
+                <ol class="execution-list">
+                    @foreach (var execution in executions)
+                    {
+                        <li class="execution @(execution.IsSuccess ? "is-success" : "is-failed")">
+                            <div class="execution-header">
+                                <span class="status-pill">
+                                    @execution.Status
+                                </span>
+                                <span class="meta">@execution.DurationMs.ToString("0") ms</span>
+                                <span class="meta">@execution.ExecutedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                                <span class="meta session">@execution.SessionId</span>
+                            </div>
+
+                            @if (!string.IsNullOrWhiteSpace(execution.Stdout))
+                            {
+                                <pre class="stream stdout">@execution.Stdout</pre>
+                            }
+
+                            @if (!string.IsNullOrWhiteSpace(execution.Stderr))
+                            {
+                                <pre class="stream stderr">@execution.Stderr</pre>
+                            }
+
+                            @if (!string.IsNullOrWhiteSpace(execution.Result))
+                            {
+                                <pre class="stream result">@execution.Result</pre>
+                            }
+
+                            @if (string.IsNullOrWhiteSpace(execution.Stdout)
+                                && string.IsNullOrWhiteSpace(execution.Stderr)
+                                && string.IsNullOrWhiteSpace(execution.Result))
+                            {
+                                <p class="no-output">Nessun output prodotto.</p>
+                            }
+                        </li>
+                    }
+                </ol>
+            }
+        </section>
+    </div>
+
+    <section class="panel files-panel">
+        <div class="panel-header">
+            <div>
+                <span class="eyebrow">File della sessione</span>
+                <h2>Contenuto del container</h2>
+            </div>
+            <button type="button"
+                    class="btn btn-light"
+                    disabled="@isLoadingFiles"
+                    @onclick="LoadFilesAsync">
+                @if (isLoadingFiles)
+                {
+                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                }
+                Aggiorna
+            </button>
+        </div>
+
+        <div class="file-toolbar">
+            <InputFile class="form-control"
+                       OnChange="SelectFile"
+                       disabled="@(isUploading || status?.ExecutorMode == CodeExecutorModes.Disabled)" />
+            <button type="button"
+                    class="btn btn-primary"
+                    disabled="@(selectedFile is null || isUploading)"
+                    @onclick="UploadFileAsync">
+                @if (isUploading)
+                {
+                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                    <span>Caricamento...</span>
+                }
+                else
+                {
+                    <span>Carica file</span>
+                }
+            </button>
+            <small>Dimensione massima: 20 MB. Il file sarà disponibile in <code>/mnt/data</code>.</small>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(uploadMessage))
+        {
+            <div class="alert alert-success" role="status">@uploadMessage</div>
+        }
+
+        @if (sessionFiles.Count == 0)
+        {
+            <div class="state-panel file-state">
+                <h3>Nessun file</h3>
+                <p>Carica un file oppure aggiorna l'elenco per vedere i file presenti nella sessione corrente.</p>
+            </div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table file-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Nome</th>
+                            <th scope="col">Dimensione</th>
+                            <th scope="col">Ultima modifica</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var file in sessionFiles)
+                        {
+                            <tr>
+                                <td><code>@file.FileName</code></td>
+                                <td>@FormatFileSize(file.Size)</td>
+                                <td>@FormatLastModified(file.LastModifiedTime)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="panel how-it-works">
+        <span class="eyebrow">Come funziona</span>
+        <h2>Dalla richiesta alla sandbox</h2>
+        <ol class="flow">
+            <li>
+                <strong>Web</strong>
+                <span>La pagina Blazor invia codice e identificatore di sessione all'API.</span>
+            </li>
+            <li>
+                <strong>API</strong>
+                <span>Ottiene un token Entra con audience <code>https://dynamicsessions.io</code> tramite managed identity.</span>
+            </li>
+            <li>
+                <strong>Session pool</strong>
+                <span>
+                    <code>POST {endpoint}/executions?api-version=@(status?.ApiVersion ?? "2025-10-02-preview")&amp;identifier={sessionId}</code>
+                    instrada la richiesta alla sandbox associata all'identificatore.
+                </span>
+            </li>
+            <li>
+                <strong>Sandbox</strong>
+                <span>Il codice gira isolato a livello di hypervisor; stdout, stderr e risultato tornano in modo sincrono.</span>
+            </li>
+        </ol>
+        @if (!string.IsNullOrWhiteSpace(status?.PoolManagementEndpoint))
+        {
+            <p class="endpoint">Pool configurato: <code>@status.PoolManagementEndpoint</code></p>
+        }
+    </section>
+</div>
+
+@code {
+    private const string DefaultCode = """
+        print("Hello dalla dynamic session!")
+        """;
+    private const long MaxUploadBytes = 20 * 1024 * 1024;
+
+    private readonly List<CodeExecutionResult> executions = [];
+
+    private IReadOnlyList<CodeSample> samples = [];
+    private IReadOnlyList<SessionFile> sessionFiles = [];
+    private CodeExecutionStatus? status;
+    private IBrowserFile? selectedFile;
+    private string sessionId = NewSessionId();
+    private string code = DefaultCode;
+    private string? selectedSampleId;
+    private string? errorMessage;
+    private string? uploadMessage;
+    private bool isRunning;
+    private bool isLoadingFiles;
+    private bool isUploading;
+
+    private CodeSample? SelectedSample => samples.FirstOrDefault(sample => sample.Id == selectedSampleId);
+
+    private string ModeLabel => status?.ExecutorMode switch
+    {
+        CodeExecutorModes.AzureDynamicSessions => "Azure dynamic sessions",
+        CodeExecutorModes.LocalFallback => "Esecuzione locale",
+        CodeExecutorModes.Disabled => "Esecuzione disabilitata",
+        _ => "Verifica in corso..."
+    };
+
+    private string ModeCssClass => status?.ExecutorMode switch
+    {
+        CodeExecutorModes.AzureDynamicSessions => "is-azure",
+        CodeExecutorModes.LocalFallback => "is-local",
+        CodeExecutorModes.Disabled => "is-disabled",
+        _ => "is-unknown"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            status = await CodeApi.GetStatusAsync();
+            samples = await CodeApi.GetSamplesAsync();
+
+            var first = samples.FirstOrDefault();
+            if (first is not null)
+            {
+                LoadSample(first);
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Impossibile contattare l'API: {ex.Message}";
+        }
+    }
+
+    private void LoadSample(CodeSample sample)
+    {
+        selectedSampleId = sample.Id;
+        code = sample.Code;
+    }
+
+    private void NewSession()
+    {
+        sessionId = NewSessionId();
+        executions.Clear();
+        sessionFiles = [];
+        selectedFile = null;
+        uploadMessage = null;
+    }
+
+    private void ClearHistory() => executions.Clear();
+
+    private async Task ExecuteAsync()
+    {
+        if (isRunning || string.IsNullOrWhiteSpace(code))
+        {
+            return;
+        }
+
+        isRunning = true;
+        errorMessage = null;
+
+        try
+        {
+            var result = await CodeApi.ExecuteAsync(new CodeExecutionInput(code, sessionId));
+            sessionId = result.SessionId;
+            executions.Insert(0, result);
+            await LoadFilesAsync();
+        }
+        catch (CodeExecutionFailedException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Errore imprevisto: {ex.Message}";
+        }
+        finally
+        {
+            isRunning = false;
+        }
+    }
+
+    private void SelectFile(InputFileChangeEventArgs args)
+    {
+        selectedFile = args.File;
+        uploadMessage = null;
+    }
+
+    private async Task UploadFileAsync()
+    {
+        if (selectedFile is null || isUploading)
+        {
+            return;
+        }
+
+        isUploading = true;
+        errorMessage = null;
+        uploadMessage = null;
+
+        try
+        {
+            await using var stream = selectedFile.OpenReadStream(MaxUploadBytes);
+            var result = await CodeApi.UploadFileAsync(sessionId, selectedFile.Name, stream);
+            uploadMessage = $"File '{result.FileName}' caricato in {result.Path}.";
+            selectedFile = null;
+            await LoadFilesAsync();
+        }
+        catch (CodeExecutionFailedException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (IOException ex)
+        {
+            errorMessage = $"Impossibile leggere il file: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Errore imprevisto durante il caricamento: {ex.Message}";
+        }
+        finally
+        {
+            isUploading = false;
+        }
+    }
+
+    private async Task LoadFilesAsync()
+    {
+        if (isLoadingFiles)
+        {
+            return;
+        }
+
+        isLoadingFiles = true;
+        errorMessage = null;
+
+        try
+        {
+            sessionFiles = await CodeApi.GetFilesAsync(sessionId);
+        }
+        catch (CodeExecutionFailedException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Impossibile leggere i file della sessione: {ex.Message}";
+        }
+        finally
+        {
+            isLoadingFiles = false;
+        }
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        var size = (double)bytes;
+        var unit = 0;
+
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+
+        return $"{size:0.##} {units[unit]}";
+    }
+
+    private static string FormatLastModified(DateTimeOffset timestamp) =>
+        timestamp == DateTimeOffset.MinValue
+            ? "Non disponibile"
+            : timestamp.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss");
+
+    private static string NewSessionId() => $"demo-{Guid.NewGuid():n}"[..16];
+}

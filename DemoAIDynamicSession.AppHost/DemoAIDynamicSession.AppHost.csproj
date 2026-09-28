@@ -1,0 +1,21 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.5.4">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AspireUseCliBundle>true</AspireUseCliBundle>
+    <UserSecretsId>39291b18-fb67-46e8-ae4e-ae9c84ca0161</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DemoAIDynamicSession.ApiService\DemoAIDynamicSession.ApiService.csproj" />
+    <ProjectReference Include="..\DemoAIDynamicSession.Web\DemoAIDynamicSession.Web.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Aspire.Hosting.Ollama" Version="13.5.1-beta.767" />
+  </ItemGroup>
+
+</Project>

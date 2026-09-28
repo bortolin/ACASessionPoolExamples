@@ -1,0 +1,33 @@
+<ul class="list-unstyled balzor-chat-activities mb-2">
+    @foreach (var activity in Activities)
+    {
+        <li class="d-flex align-items-center gap-2 small">
+            <span class="balzor-chat-activity-icon balzor-chat-activity-@activity.Status.ToString().ToLowerInvariant()">
+                @switch (activity.Status)
+                {
+                    case ChatActivityStatus.Running:
+                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                        break;
+                    case ChatActivityStatus.Completed:
+                        <span aria-hidden="true">&#10003;</span>
+                        break;
+                    case ChatActivityStatus.Failed:
+                        <span aria-hidden="true">&#10007;</span>
+                        break;
+                    default:
+                        <span aria-hidden="true">&#8226;</span>
+                        break;
+                }
+            </span>
+            <span class="text-body-secondary">@activity.Title</span>
+            @if (!string.IsNullOrEmpty(activity.Detail))
+            {
+                <span class="text-body-tertiary">&mdash; @activity.Detail</span>
+            }
+        </li>
+    }
+</ul>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<ChatActivity> Activities { get; set; } = [];
+}

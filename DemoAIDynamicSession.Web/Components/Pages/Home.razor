@@ -1,0 +1,225 @@
+@page "/"
+@rendermode InteractiveServer
+@using DemoAIDynamicSession.Web.CodeExecution
+@using DemoAIDynamicSession.Web.SessionManagement
+@inject CodeExecutionApiClient CodeApi
+@inject SessionManagementApiClient SessionApi
+
+<PageTitle>Home</PageTitle>
+
+<div class="home-page">
+    <header class="hero">
+        <div class="hero-text">
+            <span class="eyebrow">Azure Container Apps · Dynamic Sessions</span>
+            <h1>Codice non affidabile, eseguito in sicurezza</h1>
+            <p>
+                Il codice generato da un LLM o scritto dagli utenti non va mai eseguito sul server.
+                Le <strong>dynamic sessions</strong> offrono sandbox isolate a livello di hypervisor,
+                allocate in meno di un secondo e distrutte automaticamente a fine utilizzo.
+            </p>
+            <a class="btn btn-primary" href="dynamic-sessions">Inizia dalla prima demo</a>
+        </div>
+
+        <aside class="status-card @StatusCssClass" aria-label="Stato del sistema">
+            <div class="status-head">
+                <span class="mode-dot" aria-hidden="true"></span>
+                <strong>@ModeLabel</strong>
+            </div>
+            <dl>
+                <dt>Session pool</dt>
+                <dd>@(poolStatus?.PoolName ?? "–")</dd>
+                <dt>Regione</dt>
+                <dd>@(poolStatus?.Region ?? "–")</dd>
+                <dt>Sessioni attive</dt>
+                <dd class="big">@(activeSessions?.ToString() ?? "–")</dd>
+            </dl>
+            @if (!string.IsNullOrEmpty(statusError))
+            {
+                <small class="status-error">@statusError</small>
+            }
+            else if (codeStatus is not null)
+            {
+                <small>@codeStatus.Description</small>
+            }
+        </aside>
+    </header>
+
+    <section class="section">
+        <div class="section-head">
+            <span class="eyebrow">Percorso della demo</span>
+            <h2>Cinque tappe, dalle basi alla gestione</h2>
+        </div>
+
+        <ol class="demo-grid">
+            @foreach (var (demo, index) in Demos.Select((demo, index) => (demo, index + 1)))
+            {
+                <li>
+                    <a class="demo-card" href="@demo.Href">
+                        <div class="demo-top">
+                            <span class="demo-icon" aria-hidden="true">
+                                <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor">
+                                    @((MarkupString)demo.IconPath)
+                                </svg>
+                            </span>
+                            <span class="demo-step">@index.ToString("00")</span>
+                        </div>
+                        <h3>@demo.Title</h3>
+                        <p>@demo.Description</p>
+                        <ul class="tags">
+                            @foreach (var tag in demo.Concepts)
+                            {
+                                <li>@tag</li>
+                            }
+                        </ul>
+                        <span class="demo-open">Apri <span aria-hidden="true">→</span></span>
+                    </a>
+                </li>
+            }
+        </ol>
+    </section>
+
+    <section class="section panel">
+        <div class="section-head">
+            <span class="eyebrow">Architettura</span>
+            <h2>Dove passa ogni richiesta</h2>
+        </div>
+
+        <div class="architecture">
+            <div class="arch-node">
+                <strong>Browser</strong>
+                <span>Utente</span>
+            </div>
+            <span class="arch-link" aria-hidden="true"></span>
+            <div class="arch-node">
+                <strong>Web</strong>
+                <span>Blazor Server</span>
+            </div>
+            <span class="arch-link" aria-hidden="true"></span>
+            <div class="arch-node is-accent">
+                <strong>ApiService</strong>
+                <span>Minimal API · Semantic Kernel</span>
+            </div>
+            <div class="arch-branches">
+                <div class="arch-branch">
+                    <span class="arch-link" aria-hidden="true"></span>
+                    <div class="arch-node">
+                        <strong>LLM</strong>
+                        <span>Azure OpenAI / Ollama</span>
+                    </div>
+                    <small>genera il codice Python</small>
+                </div>
+                <div class="arch-branch">
+                    <span class="arch-link" aria-hidden="true"></span>
+                    <div class="arch-node is-azure">
+                        <strong>Session pool</strong>
+                        <span>token Entra · dynamicsessions.io</span>
+                    </div>
+                    <span class="arch-link" aria-hidden="true"></span>
+                    <div class="arch-node is-sandbox">
+                        <strong>Sandbox</strong>
+                        <span>Hyper-V · /mnt/data</span>
+                    </div>
+                    <small>esegue il codice e restituisce output e file</small>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-head">
+            <span class="eyebrow">Concetti chiave</span>
+            <h2>Tre idee da portare a casa</h2>
+        </div>
+
+        <div class="concepts">
+            <article class="concept">
+                <h3>Isolamento</h3>
+                <p>
+                    Ogni sessione è una sandbox separata a livello di hypervisor. L'accesso a internet
+                    può essere disabilitato a livello di pool, così il codice non può uscire.
+                </p>
+            </article>
+            <article class="concept">
+                <h3>Identificatore = sessione</h3>
+                <p>
+                    Lo stesso <code>identifier</code> instrada sempre alla stessa sandbox: variabili e file
+                    in <code>/mnt/data</code> restano disponibili tra una richiesta e l'altra.
+                </p>
+            </article>
+            <article class="concept">
+                <h3>Ciclo di vita</h3>
+                <p>
+                    La sessione nasce alla prima richiesta, ogni chiamata azzera il <em>cooldown</em> e,
+                    allo scadere, viene distrutta. Oppure la termini tu dalla management API.
+                </p>
+            </article>
+        </div>
+    </section>
+</div>
+
+@code {
+    private sealed record DemoLink(string Title, string Href, string Description, string[] Concepts, string IconPath);
+
+    private static readonly DemoLink[] Demos =
+    [
+        new("Dynamic Sessions", "dynamic-sessions",
+            "Le basi: esegui Python nella sandbox, carica file e leggi il contenuto della sessione.",
+            ["executions", "identifier", "/mnt/data"],
+            "<path d=\"M0 3a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3zm9.5 5.5h-3a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1zm-6.354-.354a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2a.5.5 0 1 0-.708.708L4.793 6.5 3.146 8.146z\"/>"),
+        new("Code + ACA", "code-aca-flow",
+            "Un LLM genera il codice a partire da un file caricato; la sandbox lo esegue e produce gli artefatti.",
+            ["code generation", "upload", "download"],
+            "<path d=\"M9.293 0H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.707A1 1 0 0 0 13.707 4L10 .293A1 1 0 0 0 9.293 0M9.5 3.5v-2l3 3h-2a1 1 0 0 1-1-1M6.646 7.646a.5.5 0 1 1 .708.708L5.707 10l1.647 1.646a.5.5 0 0 1-.708.708l-2-2a.5.5 0 0 1 0-.708zm2.708 0 2 2a.5.5 0 0 1 0 .708l-2 2a.5.5 0 0 1-.708-.708L10.293 10 8.646 8.354a.5.5 0 1 1 .708-.708\"/>"),
+        new("Chat Demo", "chat-demo",
+            "Lo stesso flusso dentro una chat: chiedi un'analisi, il codice gira nella sandbox e i file tornano in conversazione.",
+            ["chat", "allegati", "file generati"],
+            "<path d=\"M16 8c0 3.866-3.582 7-8 7a9 9 0 0 1-2.347-.306c-.584.296-1.925.864-4.181 1.234-.2.032-.352-.176-.273-.362.354-.836.674-1.95.77-2.966C.744 11.37 0 9.76 0 8c0-3.866 3.582-7 8-7s8 3.134 8 7M5 8a1 1 0 1 0-2 0 1 1 0 0 0 2 0m4 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0m3 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2\"/>"),
+        new("Semantic Kernel", "semantic-kernel-demo",
+            "Un agente Semantic Kernel usa il plugin delle sessioni per trasformare un PDF di contatti in Excel.",
+            ["agente", "SessionsPythonPlugin", "PDF → Excel"],
+            "<path fill-rule=\"evenodd\" d=\"M6 3.5A1.5 1.5 0 0 1 7.5 2h1A1.5 1.5 0 0 1 10 3.5v1A1.5 1.5 0 0 1 8.5 6v1H14a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-1 0V8h-5v.5a.5.5 0 0 1-1 0V8h-5v.5a.5.5 0 0 1-1 0v-1A.5.5 0 0 1 2 7h5.5V6A1.5 1.5 0 0 1 6 4.5zm-6 8A1.5 1.5 0 0 1 1.5 10h1A1.5 1.5 0 0 1 4 11.5v1A1.5 1.5 0 0 1 2.5 14h-1A1.5 1.5 0 0 1 0 12.5zm6 0A1.5 1.5 0 0 1 7.5 10h1a1.5 1.5 0 0 1 1.5 1.5v1A1.5 1.5 0 0 1 8.5 14h-1A1.5 1.5 0 0 1 6 12.5zm6 0a1.5 1.5 0 0 1 1.5-1.5h1a1.5 1.5 0 0 1 1.5 1.5v1a1.5 1.5 0 0 1-1.5 1.5h-1a1.5 1.5 0 0 1-1.5-1.5z\"/>"),
+        new("Session Pool", "session-pool",
+            "La parte di gestione: elenca le sessioni attive, controlla scadenze e terminale su richiesta.",
+            ["listSessions", "cooldown", "DELETE session"],
+            "<path d=\"M2 9a2 2 0 0 0-2 2v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1a2 2 0 0 0-2-2zm.5 3a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1m2 0a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1M2 2a2 2 0 0 0-2 2v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm.5 3a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1m2 0a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1\"/>")
+    ];
+
+    private CodeExecutionStatus? codeStatus;
+    private SessionManagementStatus? poolStatus;
+    private int? activeSessions;
+    private string? statusError;
+
+    private string ModeLabel => codeStatus?.ExecutorMode switch
+    {
+        CodeExecutorModes.AzureDynamicSessions => "Pool Azure collegato",
+        CodeExecutorModes.LocalFallback => "Esecuzione locale",
+        CodeExecutorModes.Disabled => "Esecuzione disabilitata",
+        _ => statusError is null ? "Verifica in corso..." : "API non raggiungibile"
+    };
+
+    private string StatusCssClass => codeStatus?.ExecutorMode switch
+    {
+        CodeExecutorModes.AzureDynamicSessions => "is-azure",
+        CodeExecutorModes.LocalFallback => "is-local",
+        CodeExecutorModes.Disabled => "is-disabled",
+        _ => statusError is null ? "is-unknown" : "is-disabled"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            codeStatus = await CodeApi.GetStatusAsync();
+            poolStatus = await SessionApi.GetStatusAsync();
+
+            if (poolStatus.IsAvailable)
+            {
+                activeSessions = (await SessionApi.ListSessionsAsync()).Count;
+            }
+        }
+        catch (Exception ex)
+        {
+            statusError = $"Impossibile leggere lo stato: {ex.Message}";
+        }
+    }
+}

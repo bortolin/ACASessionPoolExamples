@@ -1,0 +1,26 @@
+@if (Prompts is { Count: > 0 })
+{
+    <div class="d-flex flex-wrap justify-content-center gap-2 balzor-chat-suggested-prompts">
+        @foreach (var prompt in Prompts)
+        {
+            <button type="button"
+                    class="btn btn-outline-secondary btn-sm"
+                    disabled="@Disabled"
+                    @onclick="() => OnPromptSelected.InvokeAsync(prompt.Text)">
+                @if (!string.IsNullOrEmpty(prompt.IconCssClass))
+                {
+                    <i class="@prompt.IconCssClass me-1" aria-hidden="true"></i>
+                }
+                @(prompt.Label ?? prompt.Text)
+            </button>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<SuggestedPrompt>? Prompts { get; set; }
+
+    [Parameter] public bool Disabled { get; set; }
+
+    [Parameter] public EventCallback<string> OnPromptSelected { get; set; }
+}
